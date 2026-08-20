@@ -1,0 +1,9 @@
+# The Benzhi builder downloads declared dependencies from go.mod/go.sum.
+vendor/
+*.db
+*.db-wal
+*.db-shm
+*.test
+.git
+.private
+*.log

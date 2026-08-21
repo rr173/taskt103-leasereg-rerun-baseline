@@ -122,8 +122,12 @@ func (s *Store) DeleteResource(ctx context.Context, name string, now int64) erro
 	if n == 0 {
 		return ErrResourceNotFound
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM fencing_counters WHERE resource = ?`, name); err != nil {
-		return fmt.Errorf("delete fencing counter: %w", err)
-	}
+	// The per-resource fencing counter is intentionally left in place.
+	// Removing the metadata row must not reset the monotonic-token
+	// sequence: a resource re-registered under the same name after deletion
+	// must continue allocating tokens where it left off, so that a stale
+	// holder holding an old token can never re-acquire the recycled name
+	// with that token. allocTokenTx re-creates the row on demand only when
+	// no counter exists (e.g. a resource that was never leased).
 	return tx.Commit()
 }

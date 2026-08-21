@@ -410,8 +410,9 @@ func (s *Store) ListExpired(ctx context.Context, now int64) ([]LeaseRow, error) 
 }
 
 // Stats summarises the database: active leases, expired-but-unswept leases,
-// distinct resources ever seen (from fencing counters) and distinct holders
-// of currently-stored leases.
+// distinct resources ever seen (from fencing counters) and distinct holders of
+// leases that are still active at now. Holders of expired-but-unswept leases are
+// excluded — their lease has already lapsed and the sweep will remove the row.
 type Stats struct {
 	ActiveLeases   int
 	ExpiredLeases  int
@@ -431,7 +432,12 @@ func (s *Store) Stats(ctx context.Context, now int64) (Stats, error) {
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM fencing_counters`).Scan(&st.TotalResources); err != nil {
 		return st, err
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT holder) FROM leases`).Scan(&st.TotalHolders); err != nil {
+	// Only leases that are still active at now count towards the holder total.
+	// An expired-but-not-yet-swept lease has already lapsed, so its holder must
+	// not be reported as still holding the resource — the sweep will remove the
+	// row shortly, but until then the statistic must reflect liveness, not the
+	// raw row count.
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT holder) FROM leases WHERE expires_at > ?`, now).Scan(&st.TotalHolders); err != nil {
 		return st, err
 	}
 	return st, nil

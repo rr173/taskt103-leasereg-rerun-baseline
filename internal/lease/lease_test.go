@@ -263,3 +263,59 @@ func TestLeaseExpired(t *testing.T) {
 		t.Fatal("before expiry should not be expired")
 	}
 }
+
+// TestManagerInfoExpiredNotSweptTreatedAsMissing locks in the contract that a
+// lease which has elapsed but whose row Sweep has not yet reaped must NOT be
+// reported as the current lease: Info returns the not-found tuple
+// (zero, false, nil). The row stays around for the listing endpoints, so
+// ListExpired still surfaces it.
+func TestManagerInfoExpiredNotSweptTreatedAsMissing(t *testing.T) {
+	m, _, clk, _ := newManager(t, time.Unix(1000, 0))
+	ctx := context.Background()
+	if _, _, err := m.Acquire(ctx, "R", "alice", 60); err != nil { // expires at 1060
+		t.Fatal(err)
+	}
+	clk.Advance(120 * time.Second) // past expiry, no sweep
+
+	// current-lease query reports not-found
+	l, ok, err := m.Info(ctx, "R")
+	if err != nil || ok {
+		t.Fatalf("Info expired-unswept: l=%+v ok=%v err=%v", l, ok, err)
+	}
+
+	// the listing endpoints still keep the pending-sweep record
+	expired, err := m.ListExpired(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expired) != 1 || expired[0].Resource != "R" {
+		t.Fatalf("ListExpired = %+v, want the unswept R row", expired)
+	}
+	all, err := m.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("List = %d rows, want the pending-sweep record kept", len(all))
+	}
+}
+
+// TestManagerInfoBoundaryExpiryTreatedAsMissing confirms the expiry boundary
+// (ExpiresAt == now) is itself treated as gone for the current-lease query,
+// matching the half-open TTL window used everywhere else.
+func TestManagerInfoBoundaryExpiryTreatedAsMissing(t *testing.T) {
+	m, _, clk, _ := newManager(t, time.Unix(1000, 0))
+	ctx := context.Background()
+	if _, _, err := m.Acquire(ctx, "R", "alice", 60); err != nil { // expires at 1060
+		t.Fatal(err)
+	}
+	clk.Advance(60 * time.Second) // exactly at expiry
+	if _, ok, err := m.Info(ctx, "R"); err != nil || ok {
+		t.Fatalf("Info at expiry boundary: ok=%v err=%v", ok, err)
+	}
+	// one second before expiry it is still the current lease
+	clk.Advance(-1 * time.Second)
+	if l, ok, err := m.Info(ctx, "R"); err != nil || !ok || l.Holder != "alice" {
+		t.Fatalf("Info one second before expiry: l=%+v ok=%v err=%v", l, ok, err)
+	}
+}

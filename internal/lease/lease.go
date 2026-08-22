@@ -145,6 +145,12 @@ func (m *Manager) Sweep(ctx context.Context) (int, error) {
 
 // Info returns the current lease for resource. If none exists it returns
 // (zero, false, nil).
+//
+// A lease whose TTL has already elapsed is treated as not-current even before
+// Sweep has reaped its row: the current-lease query must report "no lease"
+// semantics rather than advertise an expired record as the active holder.
+// The expired-but-unswept row is left in place for the listing endpoints
+// (List, ListExpired), which keep pending-sweep records by convention.
 func (m *Manager) Info(ctx context.Context, resource string) (Lease, bool, error) {
 	if resource == "" {
 		return Lease{}, false, ErrEmptyResource
@@ -156,7 +162,11 @@ func (m *Manager) Info(ctx context.Context, resource string) (Lease, bool, error
 	if row == nil {
 		return Lease{}, false, nil
 	}
-	return rowToLease(*row), true, nil
+	l := rowToLease(*row)
+	if l.Expired(m.clock.Now()) {
+		return Lease{}, false, nil
+	}
+	return l, true, nil
 }
 
 // List returns every lease (including expired ones not yet swept), ordered by

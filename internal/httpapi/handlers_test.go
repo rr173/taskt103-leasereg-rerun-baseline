@@ -180,6 +180,32 @@ func TestHTTPInfoMissing(t *testing.T) {
 	}
 }
 
+// TestHTTPInfoExpiredNotSweptIsNotFound locks in the contract that a lease
+// which has elapsed but has not yet been swept must not be served as the
+// current lease: both the /info query and the RESTful /leases/{resource}
+// detail endpoint return 404 not-found semantics. The expired row is still
+// kept for the listing endpoints (List, /expired).
+func TestHTTPInfoExpiredNotSweptIsNotFound(t *testing.T) {
+	ts, clk := newTestServer(t, time.Unix(1000, 0))
+	do(t, ts, "POST", "/acquire", acquireRequest{Resource: "R", Holder: "alice", TTLSeconds: 60})
+	clk.Advance(120 * time.Second) // expired, not swept
+
+	if status, _ := do(t, ts, "GET", "/info?resource=R", nil); status != 404 {
+		t.Fatalf("/info expired-unswept status=%d want 404", status)
+	}
+	if status, _ := do(t, ts, "GET", "/leases/R", nil); status != 404 {
+		t.Fatalf("/leases/R expired-unswept status=%d want 404", status)
+	}
+
+	// the pending-sweep record is still surfaced by the listing endpoints
+	if status, body := do(t, ts, "GET", "/leases", nil); status != 200 || len(arr(t, body)) != 1 {
+		t.Fatalf("/leases expired-unswept status=%d body=%v", status, body)
+	}
+	if status, body := do(t, ts, "GET", "/expired", nil); status != 200 || len(arr(t, body)) != 1 {
+		t.Fatalf("/expired status=%d body=%v", status, body)
+	}
+}
+
 func TestHTTPValidation(t *testing.T) {
 	ts, _ := newTestServer(t, time.Unix(1000, 0))
 	status, body := do(t, ts, "POST", "/acquire", acquireRequest{Resource: "", Holder: "a", TTLSeconds: 60})

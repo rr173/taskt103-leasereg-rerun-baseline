@@ -189,6 +189,8 @@ func (s *Store) Acquire(ctx context.Context, resource, holder string, ttlSec, no
 // from now. It fails with ErrExpired, ErrHolderMismatch, ErrTokenMismatch or
 // ErrNoLease as appropriate. Renewing an expired lease is forbidden even for
 // the original holder: they must re-acquire, which allocates a fresh token.
+// A ttlSec larger than the resource's registered max_ttl is rejected with
+// ErrTTLExceedsMax before any write, leaving the existing lease unchanged.
 func (s *Store) Renew(ctx context.Context, resource, holder string, fencingToken, ttlSec, now int64) (acquiredAt, expiresAt int64, err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -211,6 +213,14 @@ func (s *Store) Renew(ctx context.Context, resource, holder string, fencingToken
 	}
 	if existing.FencingToken != fencingToken {
 		return 0, 0, ErrTokenMismatch
+	}
+	// Enforce a registered resource's max_ttl, if any. A max_ttl of 0 means
+	// "unbounded" (the default for unregistered resources). The check runs
+	// before any write so a rejected renewal leaves the original lease intact.
+	if maxTTL, ok, err := maxTTLForTx(ctx, tx, resource); err != nil {
+		return 0, 0, err
+	} else if ok && maxTTL > 0 && ttlSec > maxTTL {
+		return 0, 0, fmt.Errorf("renew: %w", ErrTTLExceedsMax)
 	}
 	expiresAt = now + ttlSec
 	if _, err := tx.ExecContext(ctx, `UPDATE leases SET expires_at = ?, ttl_seconds = ? WHERE resource = ?`, expiresAt, ttlSec, resource); err != nil {

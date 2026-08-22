@@ -134,6 +134,41 @@ func TestAcquireEnforcesMaxTTL(t *testing.T) {
 	}
 }
 
+func TestRenewEnforcesMaxTTL(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if err := s.RegisterResource(ctx, "R", 100, "", 1000); err != nil {
+		t.Fatal(err)
+	}
+	// acquire within the cap; expires at 1100 (now=1000 + 100)
+	if _, _, _, err := s.Acquire(ctx, "R", "alice", 100, 1000); err != nil {
+		t.Fatalf("acquire within cap: %v", err)
+	}
+	// renew within the cap is allowed; expiry moves to now+60 = 1060
+	if _, exp, err := s.Renew(ctx, "R", "alice", 1, 60, 1000); err != nil {
+		t.Fatalf("renew within cap: %v", err)
+	} else if exp != 1060 {
+		t.Fatalf("renew expiry = %d, want 1060", exp)
+	}
+	// renew over the cap is rejected before any write
+	_, _, err := s.Renew(ctx, "R", "alice", 1, 101, 1010)
+	if !errors.Is(err, ErrTTLExceedsMax) {
+		t.Fatalf("err = %v, want ErrTTLExceedsMax", err)
+	}
+	// the rejected renewal left the original lease unchanged: its expiry is
+	// still 1060 (the value set by the successful renew), not 1111.
+	got, err := s.Get(ctx, "R")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ExpiresAt != 1060 {
+		t.Fatalf("lease expiry changed after rejected renew = %d, want 1060", got.ExpiresAt)
+	}
+	if got.TTLSeconds != 60 {
+		t.Fatalf("lease ttl changed after rejected renew = %d, want 60", got.TTLSeconds)
+	}
+}
+
 func TestAcquireNoCapWhenUnregistered(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

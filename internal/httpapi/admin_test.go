@@ -128,6 +128,35 @@ func TestHTTPResourceCRUD(t *testing.T) {
 	}
 }
 
+func TestHTTPRenewEnforcesMaxTTL(t *testing.T) {
+	ts, _ := newTestServer(t, time.Unix(1000, 0))
+	// register with a 100s cap and acquire within it (expires at 1100)
+	if status, _ := do(t, ts, "POST", "/resources", resourceRequest{Name: "R", MaxTTL: 100}); status != 201 {
+		t.Fatalf("register status=%d", status)
+	}
+	if status, _ := do(t, ts, "POST", "/acquire", acquireRequest{Resource: "R", Holder: "alice", TTLSeconds: 100}); status != 200 {
+		t.Fatalf("acquire within cap status=%d", status)
+	}
+	// renew over the cap is rejected with 400
+	status, body := do(t, ts, "POST", "/renew", renewRequest{Resource: "R", Holder: "alice", FencingToken: 1, TTLSeconds: 101})
+	if status != 400 {
+		t.Fatalf("renew over max_ttl status=%d want 400 body=%v", status, body)
+	}
+	// the rejected renewal left the original lease unchanged: still held by
+	// alice with token 1 and the original expiry (1100).
+	status, body = do(t, ts, "GET", "/info?resource=R", nil)
+	if status != 200 {
+		t.Fatalf("info status=%d body=%v", status, body)
+	}
+	b := obj(t, body)
+	if b["holder"] != "alice" || b["fencing_token"].(float64) != 1 {
+		t.Fatalf("lease state changed after rejected renew: %v", b)
+	}
+	if b["expires_at"].(float64) != 1100 {
+		t.Fatalf("lease expiry changed after rejected renew = %v, want 1100", b["expires_at"])
+	}
+}
+
 func TestHTTPResourceDeleteInUse(t *testing.T) {
 	ts, _ := newTestServer(t, time.Unix(1000, 0))
 	do(t, ts, "POST", "/acquire", acquireRequest{Resource: "R", Holder: "alice", TTLSeconds: 60})

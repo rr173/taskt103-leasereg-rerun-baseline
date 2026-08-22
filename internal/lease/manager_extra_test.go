@@ -173,6 +173,45 @@ func TestManagerAcquireEnforcesMaxTTL(t *testing.T) {
 	}
 }
 
+func TestManagerRenewEnforcesMaxTTL(t *testing.T) {
+	m, _, clk, _ := newManager(t, time.Unix(1000, 0))
+	ctx := context.Background()
+	if err := m.RegisterResource(ctx, "R", "", 100); err != nil {
+		t.Fatal(err)
+	}
+	// acquire within the cap; expires at 1060
+	l, _, err := m.Acquire(ctx, "R", "alice", 100)
+	if err != nil {
+		t.Fatalf("acquire within cap: %v", err)
+	}
+	// renew within the cap is allowed
+	rn, err := m.Renew(ctx, "R", "alice", l.FencingToken, 60)
+	if err != nil {
+		t.Fatalf("renew within cap: %v", err)
+	}
+	if !rn.ExpiresAt.Equal(time.Unix(1060, 0)) {
+		t.Fatalf("renew expiresAt = %v, want 1060", rn.ExpiresAt)
+	}
+	// renew over the cap is rejected before any write
+	clk.Advance(10 * time.Second) // now = 1010
+	_, err = m.Renew(ctx, "R", "alice", l.FencingToken, 101)
+	if !errors.Is(err, store.ErrTTLExceedsMax) {
+		t.Fatalf("err = %v, want ErrTTLExceedsMax", err)
+	}
+	// the rejected renewal left the original lease unchanged: expiry is still
+	// 1060 (the value set by the successful renew), holder and token untouched.
+	info, ok, err := m.Info(ctx, "R")
+	if err != nil || !ok {
+		t.Fatalf("info after rejected renew: info=%+v ok=%v err=%v", info, ok, err)
+	}
+	if !info.ExpiresAt.Equal(time.Unix(1060, 0)) {
+		t.Fatalf("lease expiry changed after rejected renew = %v, want 1060", info.ExpiresAt)
+	}
+	if info.Holder != "alice" || info.FencingToken != l.FencingToken {
+		t.Fatalf("lease state changed after rejected renew = %+v", info)
+	}
+}
+
 func TestManagerDeleteResourceInUse(t *testing.T) {
 	m, _, _, _ := newManager(t, time.Unix(1000, 0))
 	ctx := context.Background()

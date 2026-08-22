@@ -206,6 +206,30 @@ func TestHTTPBadJSON(t *testing.T) {
 	}
 }
 
+// TestHTTPTrailingSecondJSONValue guards the parsing discipline: when a body
+// contains a complete JSON object followed by a second JSON value, the request
+// must be rejected with 400 rather than silently accepting the first object.
+func TestHTTPTrailingSecondJSONValue(t *testing.T) {
+	ts, _ := newTestServer(t, time.Unix(1000, 0))
+	// A valid acquire payload immediately followed by a second JSON object.
+	body := `{"resource":"R","holder":"alice","ttl_seconds":60}{"resource":"R2","holder":"bob","ttl_seconds":60}`
+	req, _ := http.NewRequest("POST", ts.URL+"/acquire", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatalf("status=%d want 400 (trailing second JSON value must be rejected)", resp.StatusCode)
+	}
+	// The request must not have taken effect: no lease for R should exist.
+	status, _ := do(t, ts, "GET", "/info?resource=R", nil)
+	if status != 404 {
+		t.Fatalf("info status=%d want 404 (first object must not have been processed)", status)
+	}
+}
+
 func TestHTTPHealth(t *testing.T) {
 	ts, _ := newTestServer(t, time.Unix(1000, 0))
 	status, body := do(t, ts, "GET", "/health", nil)

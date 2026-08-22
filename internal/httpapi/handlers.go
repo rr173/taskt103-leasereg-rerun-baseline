@@ -114,6 +114,15 @@ func decode(r *http.Request, dst any) error {
 	if err := dec.Decode(dst); err != nil {
 		return err
 	}
+	// The streaming decoder consumes exactly one JSON value, so a body like
+	// {"resource":"R"}{"resource":"R2"} would otherwise decode the first
+	// object and silently ignore the trailing second value, treating a
+	// malformed request as a valid one. Reject any non-whitespace trailing
+	// content — a second JSON value or any garbage — so the request is
+	// surfaced as a 400 instead of being half-accepted.
+	if dec.More() {
+		return errors.New("request body must contain a single JSON value")
+	}
 	return nil
 }
 
